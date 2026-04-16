@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -7,8 +8,18 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-# 1. DATABASE SETUP
-DATABASE_URL = "postgresql://postgres:1234@localhost/dukaan_db"
+# 1. DATABASE SETUP (Railway Friendly)
+# Railway khud DATABASE_URL provide karta hai, agar na mile to localhost use hoga
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Agar Railway ka URL "postgres://" se shuru ho raha hai to usay "postgresql://" mein badalna zaroori hai
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Agar kuch bhi na mile (local testing), to purana link use kare
+if not DATABASE_URL:
+    DATABASE_URL = "postgresql://postgres:1234@localhost/dukaan_db"
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
