@@ -5,21 +5,18 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import datetime
+from pydantic import BaseModel
+from typing import Optional
+from typing import List
+from datetime import datetime
+from typing import Optional
 
-# 1. DATABASE SETUP (Railway Friendly)
-# Railway khud DATABASE_URL provide karta hai, agar na mile to localhost use hoga
-DATABASE_URL = os.getenv("DATABASE_URL")
+# ------------------
+# 1. DATABASE SETUP
+# ------------------
 
-# Agar Railway ka URL "postgres://" se shuru ho raha hai to usay "postgresql://" mein badalna zaroori hai
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# Agar kuch bhi na mile (local testing), to purana link use kare
-if not DATABASE_URL:
-    DATABASE_URL = "postgresql://postgres:1234@localhost/dukaan_db"
-
+DATABASE_URL = "postgresql://postgres:123@localhost/dukaan_db"
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -71,15 +68,14 @@ class OrderItemDB(Base):
     product = relationship("ProductDB")
 
 class SettingsDB(Base):
-    __tablename__ = "app_settings"
+    __tablename__ = "settings"
+    
     id = Column(Integer, primary_key=True, index=True)
     business_name = Column(String, default="Timeline POS")
     phone = Column(String, default="03001234567")
     email = Column(String, default="info@timeline.com")
     currency_symbol = Column(String, default="Rs.")
     tax_rate = Column(Float, default=0.0)
-    low_stock_alert_level = Column(Integer, default=5)
-    receipt_message = Column(String, default="Thank you!")
 
 Base.metadata.create_all(bind=engine)
 
@@ -92,16 +88,37 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# 4. PYDANTIC MODELS
-class ProductCreate(BaseModel): name: str; sku: str; category: str; cost_price: float; selling_price: float; stock_level: int; low_stock_alert: int
-class CustomerCreate(BaseModel): name: str; phone: str; email: Optional[str] = None
-class CartItem(BaseModel): product_id: int; quantity: int; price: float
-class CheckoutRequest(BaseModel): cart_items: List[CartItem]; discount: float = 0.0; customer_id: Optional[int] = None
-class SettingsUpdate(BaseModel): business_name: str; phone: str; email: str; currency_symbol: str; tax_rate: float; low_stock_alert_level: int; receipt_message: str
+# Temporary route just to check if server is running
+@app.get("/")
+def read_root():
+    return {"message": "New Supermarket Backend is Ready!"}
 
-# 5. ENDPOINTS
+# -------------------------------------------
+# 4. PYDANTIC MODELS (Data Validation Rules)
+# -------------------------------------------
 
-# Products CRUD
+# Rule for creating or updating a product
+class ProductCreate(BaseModel):
+    name: str
+    sku: str
+    category: str
+    cost_price: float
+    selling_price: float
+    stock_level: int
+    low_stock_alert: int = 5
+
+# Rule for sending product data back to React
+class ProductResponse(ProductCreate):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+# ----------------------------------------
+# 5. PRODUCT & INVENTORY ENDPOINTS (CRUD)
+# ----------------------------------------
+
+# READ: Get all products (Inventory List)
 @app.get("/products")
 def get_products(db: Session = Depends(get_db)): return db.query(ProductDB).all()
 @app.post("/products")
@@ -111,27 +128,50 @@ def create_product(product: ProductCreate, db: Session = Depends(get_db)):
 def update_product(id: int, product: ProductCreate, db: Session = Depends(get_db)):
     db_product = db.query(ProductDB).filter(ProductDB.id == id).first()
     if db_product:
-        for key, value in product.dict().items(): setattr(db_product, key, value)
-        db.commit(); return db_product
-@app.delete("/products/{id}")
-def delete_product(id: int, db: Session = Depends(get_db)):
-    db_product = db.query(ProductDB).filter(ProductDB.id == id).first()
-    if db_product: db.delete(db_product); db.commit(); return {"msg": "Deleted"}
+        db_product.name = product.name
+        db_product.sku = product.sku
+        db_product.category = product.category
+        db_product.cost_price = product.cost_price
+        db_product.selling_price = product.selling_price
+        db_product.stock_level = product.stock_level
+        db_product.low_stock_alert = product.low_stock_alert
+        db.commit()
+        return {"message": "Product updated successfully"}
+    return {"error": "Product not found"}
 
-# Customers CRUD
-@app.get("/customers")
-def get_customers(db: Session = Depends(get_db)): return db.query(CustomerDB).all()
-@app.post("/customers")
-def create_customer(customer: CustomerCreate, db: Session = Depends(get_db)):
-    new_customer = CustomerDB(**customer.dict()); db.add(new_customer); db.commit(); return new_customer
-@app.put("/customers/{id}")
-def update_customer(id: int, customer: CustomerCreate, db: Session = Depends(get_db)):
-    db_cust = db.query(CustomerDB).filter(CustomerDB.id == id).first()
-    if db_cust:
-        for key, value in customer.dict().items(): setattr(db_cust, key, value)
-        db.commit(); return db_cust
+# DELETE: Remove product from inventory
+@app.delete("/products/{product_id}")
+def delete_product(product_id: int, db: Session = Depends(get_db)):
+    db_product = db.query(ProductDB).filter(ProductDB.id == product_id).first()
+    if db_product:
+        db.delete(db_product)
+        db.commit()
+        return {"message": "Product deleted"}
+    return {"error": "Product not found"}
 
-# Orders & Checkout
+# -----------------------------------------
+# 6. CHECKOUT PYDANTIC MODELS (Cart rules)
+# -----------------------------------------
+
+# Rule for a single item in the cart
+class CartItem(BaseModel):
+    product_id: int
+    quantity: int
+    price: float
+
+# Rule for the complete checkout bill
+# ----------------------------------------------------------
+# UPDATE: Checkout Pydantic Model (Find this and replace it)
+# ----------------------------------------------------------
+class CheckoutRequest(BaseModel):
+    cart_items: List[CartItem]
+    discount: float = 0.0
+    customer_id: Optional[int] = None # NEW: Now we can optionally send a customer ID
+
+# ----------------------------------
+# 7. CHECKOUT ENDPOINT (POS Billing)
+# ----------------------------------
+
 @app.post("/checkout")
 def process_checkout(req: CheckoutRequest, db: Session = Depends(get_db)):
     subtotal = sum(i.price * i.quantity for i in req.cart_items)
